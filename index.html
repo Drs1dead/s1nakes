@@ -18,15 +18,13 @@
     .login,.gameover{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;background:rgba(0,0,0,0.65);backdrop-filter:blur(20px);padding:50px 60px;border-radius:30px;border:1px solid rgba(255,255,255,0.3);z-index:100;}
     button{margin-top:25px;padding:16px 45px;font-size:1.3em;background:#6a5acd;border:none;border-radius:50px;color:white;cursor:pointer;box-shadow:0 10px 40px rgba(106,90,205,0.5);transition:0.3s;}
     button:hover{background:#7b68ee;transform:translateY(-3px)}
-    .leaderboard{position:absolute;top:90px;right:20px;background:rgba(0,0,0,0.4);backdrop-filter:blur(15px);padding:15px;border-radius:20px;border:1px solid rgba(255,255,255,0.2);width:300px;max-height:70vh;overflow-y:auto;display:none;}
-    .lb-item{display:flex;justify-content:space-between;padding:10px;margin:5px 0;background:rgba(255,255,255,0.07);border-radius:12px;font-size:0.95em;}
   </style>
 </head>
 <body>
 
   <div id="loginScreen" class="login">
     <h1 style="font-size:3.5em;margin-bottom:20px;background:linear-gradient(90deg,#6a5acd,#00ffea);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Liquid Snake</h1>
-    <p style="font-size:1.2em;margin:20px 0">Войди через Google — твой рекорд в мировом топе!</p>
+    <p style="font-size:1.2em;margin:20px 0">Войди через Google — готов к будущим обновлениям с рекордами!</p>
     <button id="googleBtn">Войти через Google</button>
     <p style="margin-top:30px"><a href="#" id="playGuest" style="color:#aaa;text-decoration:underline">Играть без входа</a></p>
   </div>
@@ -39,15 +37,10 @@
     <div class="score">0</div>
   </div>
 
-  <div class="leaderboard" id="leaderboard">
-    <h3>Мировой ТОП-10</h3>
-    <div id="lbList">Загрузка...</div>
-  </div>
-
   <div id="gameOverScreen" class="gameover" style="display:none">
     <h1>Игра окончена!</h1>
     <p style="font-size:2em;margin:20px 0">Счёт: <b id="finalScore">0</b></p>
-    <p id="newRecord" style="color:#0f0;font-size:1.5em;display:none">Новый рекорд!</p>
+    <p id="newRecord" style="color:#0f0;font-size:1.5em;display:none">Новый локальный рекорд!</p>
     <button onclick="restart()">Играть снова</button>
   </div>
 
@@ -59,120 +52,84 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
     import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js";
-    import { getFirestore, doc, setDoc, getDoc, collection, query, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
 
-    // ПРАВИЛЬНАЯ ОБФУСКАЦИЯ — протестировано, JSON.parse проходит!
+    // Твой зашифрованный конфиг (оставляем как есть — пригодится потом)
     const encoded = "fSJmYWM2MDA5YjQzNmJkNjYzODQzM2MzOmJldzowOTc3OTIxMTA1ODI6MSIgOiJkSXBwYSIgLCIwOTc3OTIxMTA1ODIiIDoiZElyZWRuZVNnbmlnYXNzZW0iICwicHBhLmVnYXJvdHNlc2FiZXJpZi5zcmR3bWlhcmYiIDoidGVrY3VCZWdhcm90cyIgLCJzcmR3bWlhcmYiIDoiZEl0Y2Vqb3JwIiAsIm1vYy5wcGFlc2FiZXJpZi5zcmR3bWlhcmYiIDoibmlhbW9EaHR1YSIgLCJzTV91TnM3ZV92S3ZpYnNsNzUydkN0SF9yVUVnUlRsb0F5U2F6SUEiIDoieWVLaXBhIns=";
-    let firebaseConfig;
+    let firebaseConfig = {};
     try {
       const decodedStr = atob(encoded);
       const reversedStr = decodedStr.split('').reverse().join('');
       firebaseConfig = JSON.parse(reversedStr);
     } catch (e) {
-      console.error("Ошибка расшифровки конфигурации: " + e.message);
-      alert("Ошибка загрузки игры. Попробуй обновить страницу.");
+      console.warn("Не удалось расшифровать конфиг Firebase — продолжаем оффлайн");
     }
 
-    if (!firebaseConfig) {
-      alert("Конфигурация Firebase недоступна. Играем в оффлайн-режиме без рекордов.");
-      // Fallback: игра без Firebase
+    // Инициализируем Firebase (только Auth, без Firestore)
+    let auth;
+    try {
+      const app = initializeApp(firebaseConfig);
+      auth = getAuth(app);
+    } catch (e) {
+      console.warn("Firebase не инициализирован:", e);
     }
 
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
+    let user = null;
+    let score = 0;
+    let best = localStorage.getItem('snakeBest') ? parseInt(localStorage.getItem('snakeBest')) : 0;
 
-    let user = null, score = 0, best = 0;
+    const eatSound = document.getElementById('eatSound');
     let canvas, ctx, w, h, cell, snake, food, dir = {x:1,y:0};
     let particles = [];
-    const eatSound = document.getElementById('eatSound');
 
-    // Вход через Google с русскими ошибками
+    // Google вход
     document.getElementById('googleBtn').onclick = async () => {
-      if (!auth) return alert("Авторизация недоступна. Играем как гость.");
+      if (!auth) return alert("Авторизация временно недоступна");
       const provider = new GoogleAuthProvider();
       try {
         await signInWithPopup(auth, provider);
       } catch (err) {
-        let msg = "Неизвестная ошибка входа";
-        if (err.code === 'auth/popup-blocked') msg = "Браузер заблокировал всплывающее окно. Разреши попапы.";
-        else if (err.code === 'auth/popup-closed-by-user') msg = "Вход отменён.";
-        else if (err.code === 'auth/network-request-failed') msg = "Проблемы с интернетом. Проверь соединение.";
-        else msg = "Ошибка: " + err.message;
-        alert("Ошибка входа через Google: " + msg);
-        startAsGuest();
+        let msg = "Ошибка входа";
+        if (err.code === 'auth/popup-blocked') msg = "Разреши всплывающие окна";
+        else if (err.code === 'auth/popup-closed-by-user') msg = "Вход отменён";
+        alert("Google вход: " + msg);
       }
     };
 
     document.getElementById('playGuest').onclick = e => {
       e.preventDefault();
-      startAsGuest();
-    };
-
-    function startAsGuest() {
       user = { uid: 'guest', displayName: 'Гость', photoURL: null };
       startGame();
-    }
+    };
 
-    onAuthStateChanged(auth, u => {
-      if (u) {
-        user = u;
-        startGame();
-        loadBestAndLeaderboard();
-      }
-    });
+    // Отслеживаем вход
+    if (auth) {
+      onAuthStateChanged(auth, u => {
+        if (u) {
+          user = u;
+          startGame();
+        }
+      });
+    }
 
     function startGame() {
       document.getElementById('loginScreen').style.display = 'none';
       document.getElementById('gameUI').style.display = 'flex';
-      document.getElementById('leaderboard').style.display = 'block';
-      document.getElementById('name').textContent = (user.displayName || 'Гость').split(' ')[0];
-      document.getElementById('avatar').src = user.photoURL || 'https://via.placeholder.com/45/6a5acd/fff?text=G';
+      
+      document.getElementById('name').textContent = user?.displayName?.split(' ')[0] || 'Гость';
+      document.getElementById('avatar').src = user?.photoURL || 'https://via.placeholder.com/45/6a5acd/fff?text=G';
+      document.getElementById('myBest').textContent = best;
+
       initGame();
     }
 
-    // Лидерборд с русскими ошибками
-    async function loadBestAndLeaderboard() {
-      if (!user || user.uid === 'guest' || !db) return;
-      try {
-        const userDoc = await getDoc(doc(db, "scores", user.uid));
-        if (userDoc.exists()) {
-          best = userDoc.data().score;
-          document.getElementById('myBest').textContent = best;
-        }
-
-        const q = query(collection(db, "scores"), orderBy("score", "desc"), limit(10));
-        const snap = await getDocs(q);
-        const list = document.getElementById('lbList');
-        list.innerHTML = '';
-        let pos = 1;
-        snap.forEach(d => {
-          const data = d.data();
-          list.innerHTML += `<div class="lb-item"><span>${pos++}. ${data.name}</span><b>${data.score}</b></div>`;
-        });
-      } catch (e) {
-        console.error("Ошибка загрузки лидерборда: " + e.message);
-        document.getElementById('lbList').innerHTML = 'Лидерборд временно недоступен';
-      }
-    }
-
-    async function saveRecord() {
-      if (!user || user.uid === 'guest' || score <= best || !db) return;
-      try {
-        await setDoc(doc(db, "scores", user.uid), {
-          name: (user.displayName || 'Гость').split(' ')[0],
-          score: score,
-          timestamp: new Date()
-        }, { merge: true });
+    function saveLocalBest() {
+      if (score > best) {
         best = score;
+        localStorage.setItem('snakeBest', best);
         document.getElementById('myBest').textContent = best;
-        loadBestAndLeaderboard();
-      } catch (e) {
-        console.error("Ошибка сохранения рекорда: " + e.message);
       }
     }
 
-    // Игра (без изменений)
     function initGame() {
       canvas = document.getElementById('c'); ctx = canvas.getContext('2d');
       resize(); window.addEventListener('resize', resize);
@@ -200,7 +157,7 @@
       snake.unshift(head);
       if (head.x === food.x && head.y === food.y) {
         score++; document.querySelector('.score').textContent = score;
-        eatSound.currentTime = 0; eatSound.play().catch(() => {});
+        eatSound.currentTime = 0; eatSound.play().catch(()=>{});
         spawnFood(); createParticles();
       } else snake.pop();
     }
@@ -248,9 +205,10 @@
     }
 
     function gameOver() {
-      if (score > best) saveRecord();
+      saveLocalBest();
       document.getElementById('finalScore').textContent = score;
-      document.getElementById('newRecord').style.display = (score > best) ? 'block' : 'none';
+      document.getElementById('newRecord').style.display = (score > best - score) ? 'block' : 'none'; // всегда false если был равен, иначе block
+      document.getElementById('newRecord').style.display = (score > parseInt(localStorage.getItem('snakeBest') || 0)) ? 'block' : 'none';
       document.getElementById('gameOverScreen').style.display = 'block';
     }
 
@@ -281,9 +239,12 @@
       }
     });
 
-    // Автозапуск как гость при загрузке
+    // Автозапуск как гость
     window.addEventListener('load', () => {
-      if (!user) startAsGuest();
+      if (!user) {
+        user = { uid: 'guest', displayName: 'Гость', photoURL: null };
+        startGame();
+      }
     });
   </script>
 </body>
