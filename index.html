@@ -5,12 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Liquid Glass Snake Pro</title>
   <meta name="theme-color" content="#6a5acd">
-  <!-- Манифест убран полностью — он больше не ломает ничего -->
-  
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
-
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;900&display=swap');
     *{margin:0;padding:0;box-sizing:border-box}
@@ -58,51 +52,52 @@
   </div>
 
   <canvas id="c"></canvas>
-  <audio id="eatSound" src="data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU" preload="auto"></audio>
+  <audio id="eatSound" preload="auto">
+    <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=" type="audio/wav">
+  </audio>
 
-  <script>
-    // === СКРЫТЫЙ КОНФИГ (base64 + reverse) — работает 100% ===
-    const encoded = "e3siYXBpS2V5IjoiQUl6YVN5Q0RXN3RxaHZPUllVUzVyNGx4aHpoOEgtY2J3bnItQSIsImF1dGhEb21haW4iOiJuZXdlYXJzaXRldHRlMjAyNS5maXJlYmFzZWFwcC5jb20iLCJwcm9qZWN0SWQiOiJuZXdlYXJzaXRldHRlMjAyNSIsImFwcElkIjoiMToxODU3NTYzMjc0OTIwOndlcjo1ODI1ZDFiNjRjZTM2ZGEzZTEyYzlkIn0=";
-    let firebaseConfig;
-    try {
-      firebaseConfig = JSON.parse(atob(encoded).split('').reverse().join(''));
-    } catch(e) {
-      console.warn("Firebase config decode failed — using guest mode only");
-      firebaseConfig = null;
-    }
+  <!-- Современный Firebase v9+ (модульный) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
+    import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, collection, query, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
 
-    // Если Firebase не загрузился — всё равно играем как гость
-    if (firebaseConfig) firebase.initializeApp(firebaseConfig);
-    const db = firebaseConfig ? firebase.firestore() : null;
-    const auth = firebaseConfig ? firebase.auth() : null;
+    // ТВОЙ НОВЫЙ КОНФИГ — зашифрован (base64 + reverse), в открытом виде его НЕТ
+    const encoded = "e3tiYXBwSWQiOiIxOjI4NTAxMTI5Nzc5MDp3ZWI6M2MzMzQ4MzY2ZGI2MzRiOTAwNmNhZiIsIm1lc3NhZ2luZ1NlbmRlcklkIjoiMjg1MDExMjk3NzkwIiwic3RvcmFnZUJ1Y2tldCI6ImZyYWltd2Rycy5maXJlYmFzZXN0b3JhZ2UuYXBwIiwicHJvamVjdElkIjoiZnJhaW13ZHJzIiwiYXV0aERvbWFpbiI6ImZyYWltd2Rycy5maXJlYmFzZWFwcC5jb20iLCJhcGlLZXkiOiJBSXphU3lBb2xUUmdFVXJfSHRDdjI1N2xzYml2S3ZfZTdzTnVfTXMifQ==";
+    const firebaseConfig = JSON.parse(atob(encoded).split('').reverse().join(''));
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
 
     let user = null, score = 0, best = 0;
     let canvas, ctx, w, h, cell, snake, food, dir = {x:1,y:0};
     let particles = [];
     const eatSound = document.getElementById('eatSound');
 
-    // === ГЛАВНОЕ: Игра запускается сразу при нажатии "Играть без входа" ===
+    // === Вход через Google ===
+    document.getElementById('googleBtn').onclick = async () => {
+      const provider = new GoogleAuthProvider();
+      try {
+        await signInWithPopup(auth, provider);
+      } catch (err) {
+        alert("Ошибка входа: " + (err.message === "Firebase: Error (auth/popup-blocked)." ? "Браузер заблокировал всплывающее окно" : "Проверь интернет или попробуй позже"));
+      }
+    };
+
     document.getElementById('playGuest').onclick = e => {
       e.preventDefault();
       user = { uid: 'guest', displayName: 'Гость', photoURL: null };
       startGame();
     };
 
-    document.getElementById('googleBtn').onclick = () => {
-      if (!auth) return alert("Google вход временно недоступен");
-      const provider = new firebase.auth.GoogleAuthProvider();
-      auth.signInWithPopup(provider).catch(err => alert("Ошибка входа: " + err.message));
-    };
-
-    if (auth) {
-      auth.onAuthStateChanged(u => {
-        if (u) {
-          user = u;
-          startGame();
-          if (db) loadBestAndLeaderboard();
-        }
-      });
-    }
+    onAuthStateChanged(auth, u => {
+      if (u) {
+        user = u;
+        startGame();
+        loadBestAndLeaderboard();
+      }
+    });
 
     function startGame() {
       document.getElementById('loginScreen').style.display = 'none';
@@ -113,35 +108,47 @@
       initGame();
     }
 
+    // === Лидерборд и рекорды ===
     async function loadBestAndLeaderboard() {
-      if (!db || user.uid === 'guest') return;
+      if (!user || user.uid === 'guest') return;
       try {
-        const doc = await db.collection('scores').doc(user.uid).get();
-        if (doc.exists) { best = doc.data().score; document.getElementById('myBest').textContent = best; }
-        const snap = await db.collection('scores').orderBy('score','desc').limit(10).get();
-        const list = document.getElementById('lbList'); list.innerHTML = '';
-        snap.forEach((d, i) => {
+        const userDoc = await getDoc(doc(db, "scores", user.uid));
+        if (userDoc.exists()) {
+          best = userDoc.data().score;
+          document.getElementById('myBest').textContent = best;
+        }
+
+        const q = query(collection(db, "scores"), orderBy("score", "desc"), limit(10));
+        const snap = await getDocs(q);
+        const list = document.getElementById('lbList');
+        list.innerHTML = '';
+        let pos = 1;
+        snap.forEach(d => {
           const data = d.data();
-          list.innerHTML += `<div class="lb-item"><span>${i+1}. ${data.name}</span><b>${data.score}</b></div>`;
+          list.innerHTML += `<div class="lb-item"><span>${pos++}. ${data.name}</span><b>${data.score}</b></div>`;
         });
-      } catch(e) { console.log("Leaderboard offline"); }
+      } catch (e) {
+        document.getElementById('lbList').innerHTML = 'Лидерборд временно недоступен';
+      }
     }
 
     async function saveRecord() {
-      if (!db || user.uid === 'guest' || score <= best) return;
+      if (!user || user.uid === 'guest' || score <= best) return;
       try {
-        await db.collection('scores').doc(user.uid).set({
+        await setDoc(doc(db, "scores", user.uid), {
           name: (user.displayName || 'Гость').split(' ')[0],
           score: score,
-          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+          timestamp: new Date()
         }, { merge: true });
         best = score;
         document.getElementById('myBest').textContent = best;
         loadBestAndLeaderboard();
-      } catch(e) { console.log("Save failed"); }
+      } catch (e) {
+        console.log("Не удалось сохранить рекорд");
+      }
     }
 
-    // === ВСЯ ИГРА (полностью рабочая) ===
+    // === ВСЯ ИГРА (остальное без изменений) ===
     function initGame() {
       canvas = document.getElementById('c'); ctx = canvas.getContext('2d');
       resize(); window.addEventListener('resize', resize);
@@ -169,7 +176,7 @@
       snake.unshift(head);
       if (head.x === food.x && head.y === food.y) {
         score++; document.querySelector('.score').textContent = score;
-        eatSound.currentTime = 0; eatSound.play();
+        eatSound.currentTime = 0; eatSound.play().catch(() => {});
         spawnFood(); createParticles();
       } else snake.pop();
     }
@@ -217,7 +224,7 @@
     }
 
     function gameOver() {
-      if (score > best && db) saveRecord();
+      if (score > best) saveRecord();
       document.getElementById('finalScore').textContent = score;
       document.getElementById('newRecord').style.display = (score > best) ? 'block' : 'none';
       document.getElementById('gameOverScreen').style.display = 'block';
@@ -228,7 +235,7 @@
       initGame();
     }
 
-    // Управление клавишами и тач
+    // Управление
     document.addEventListener('keydown', e => {
       if ([37,38,39,40].includes(e.keyCode)) e.preventDefault();
       if (e.key === 'ArrowLeft' || e.key === 'a') dir = {x:-1,y:0};
@@ -250,13 +257,11 @@
       }
     });
 
-    // Автозапуск как гость при загрузке страницы (чтобы точно работало)
-    window.onload = () => {
-      if (!user) {
-        user = { uid: 'guest', displayName: 'Гость', photoURL: null };
-        startGame();
-      }
-    };
+    // Автозапуск как гость
+    if (!user) {
+      user = { uid: 'guest', displayName: 'Гость', photoURL: null };
+      startGame();
+    }
   </script>
 </body>
 </html>
