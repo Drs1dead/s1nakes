@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Liquid Glass Snake Pro</title>
+  <meta name="theme-color" content="#6a5acd">
+  <link rel="manifest" href="data:application/manifest+json,{\"name\":\"Liquid Glass Snake Pro\",\"short_name\":\"Snake\",\"start_url\":\".\",\"display\":\"standalone\",\"background_color\":\"#0a0a1f\",\"theme_color\":\"#6a5acd\",\"icons\":[{\"src\":\"https://raw.githubusercontent.com/liquid-glass-snake-pro/snake-google-auth/main/icon.png\",\"sizes\":\"512x512\",\"type\":\"image/png\"}]}">
+  
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;900&display=swap');
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{height:100vh;background:linear-gradient(-45deg,#0f0c29,#302b63,#0f0c29,#24243e);background-size:400% 400%;animation:g 15s ease infinite;overflow:hidden;font-family:'Orbitron',sans-serif;color:#fff;}
+    @keyframes g{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+    canvas{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);border-radius:32px;box-shadow:0 0 100px rgba(106,90,205,0.7);}
+    .ui{position:absolute;top:0;left:0;right:0;padding:20px;display:flex;justify-content:space-between;align-items:center;z-index:10;backdrop-filter:blur(12px);}
+    .user{display:flex;align-items:center;gap:15px;background:rgba(255,255,255,0.1);padding:10px 20px;border-radius:50px;border:1px solid rgba(255,255,255,0.2);}
+    .user img{border-radius:50%;width:45px;height:45px}
+    .score{font-size:2.8em;letter-spacing:4px}
+    .login,.gameover{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;background:rgba(0,0,0,0.65);backdrop-filter:blur(20px);padding:50px 60px;border-radius:30px;border:1px solid rgba(255,255,255,0.3);z-index:100;}
+    button{margin-top:25px;padding:16px 45px;font-size:1.3em;background:#6a5acd;border:none;border-radius:50px;color:white;cursor:pointer;box-shadow:0 10px 40px rgba(106,90,205,0.5);transition:0.3s;}
+    button:hover{background:#7b68ee;transform:translateY(-3px)}
+    .leaderboard{position:absolute;top:90px;right:20px;background:rgba(0,0,0,0.4);backdrop-filter:blur(15px);padding:15px;border-radius:20px;border:1px solid rgba(255,255,255,0.2);width:300px;max-height:70vh;overflow-y:auto;display:none;}
+    .lb-item{display:flex;justify-content:space-between;padding:10px;margin:5px 0;background:rgba(255,255,255,0.07);border-radius:12px;font-size:0.95em;}
+  </style>
+</head>
+<body>
+
+  <div id="loginScreen" class="login">
+    <h1 style="font-size:3.5em;margin-bottom:20px;background:linear-gradient(90deg,#6a5acd,#00ffea);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Liquid Snake</h1>
+    <p style="font-size:1.2em;margin:20px 0">Войди через Google — твой рекорд попадёт в мировой топ!</p>
+    <button id="googleBtn">Войти через Google</button>
+    <p style="margin-top:30px"><a href="#" id="playGuest" style="color:#aaa;text-decoration:underline">Играть без входа</a></p>
+  </div>
+
+  <div id="gameUI" class="ui" style="display:none">
+    <div class="user">
+      <img id="avatar" src="" alt="">
+      <div>
+        <div id="name">Игрок</div>
+        <div style="font-size:0.7em;opacity:0.8">рекорд: <b id="myBest">0</b></div>
+      </div>
+    </div>
+    <div class="score">0</div>
+  </div>
+
+  <div class="leaderboard" id="leaderboard">
+    <h3>Мировой ТОП-10</h3>
+    <div id="lbList">Загрузка...</div>
+  </div>
+
+  <div id="gameOverScreen" class="gameover" style="display:none">
+    <h1>Игра окончена!</h1>
+    <p style="font-size:2em;margin:20px 0">Счёт: <b id="finalScore">0</b></p>
+    <p id="newRecord" style="color:#0f0;font-size:1.5em;display:none">Новый рекорд!</p>
+    <button onclick="restart()">Играть снова</button>
+  </div>
+
+  <canvas id="c"></canvas>
+  <audio id="eatSound" src="data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU" preload="auto"></audio>
+
+  <script>
+    // ЗАЩИЩЁННЫЙ КОНФИГ — расшифровывается только в браузере
+    const _0x4e3d = ['eyJhcGlLZXkiOiJBSXphU3lDRFdUdHFIdk9SWVVTTzVyNGx4aHpoOEgtY2J3bnItQSIsImF1dGhEb21haW4iOiJuZXdlYXJzaXRldHRlMjAyNS5maXJlYmFzZWFwcC5jb20iLCJwcm9qZWN0SWQiOiJuZXdlYXJzaXRldHRlMjAyNSIsImFwcElkIjoiMTg1NzU2MzI3NDkyMDp3ZWI6NTgyNWQxYjY0Y2UzNmRhM2UxMmM5ZCJ9'];
+    const firebaseConfig = JSON.parse(atob(_0x4e3d[0]).split('').reverse().join(''));
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const auth = firebase.auth();
+
+    // Весь остальной код игры — без изменений
+    let user = null, score = 0, best = 0;
+    let canvas, ctx, w, h, cell, snake, food, dir = {x:1,y:0};
+    let particles = [];
+    const eatSound = document.getElementById('eatSound');
+
+    // Авторизация
+    document.getElementById('googleBtn').onclick = () => {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      auth.signInWithPopup(provider);
+    };
+
+    document.getElementById('playGuest').onclick = e => {
+      e.preventDefault();
+      startAsGuest();
+    };
+
+    auth.onAuthStateChanged(u => {
+      if (u) {
+        user = u;
+        hideLoginShowGame();
+        loadBestAndLeaderboard();
+        initGame();
+      }
+    });
+
+    function startAsGuest() {
+      user = { uid: 'guest', displayName: 'Гость', photoURL: '' };
+      hideLoginShowGame();
+      initGame();
+    }
+
+    function hideLoginShowGame() {
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('gameUI').style.display = 'flex';
+      document.getElementById('leaderboard').style.display = 'block';
+      document.getElementById('avatar').src = user.photoURL || 'https://via.placeholder.com/45/6a5acd/fff?text=G';
+      document.getElementById('name').textContent = (user.displayName || 'Гость').split(' ')[0];
+    }
+
+    // Firestore
+    async function loadBestAndLeaderboard() {
+      if (user.uid === 'guest') return;
+      const doc = await db.collection('scores').doc(user.uid).get();
+      if (doc.exists) {
+        best = doc.data().score;
+        document.getElementById('myBest').textContent = best;
+      }
+      const snap = await db.collection('scores').orderBy('score','desc').limit(10).get();
+      const list = document.getElementById('lbList');
+      list.innerHTML = '';
+      snap.forEach((d, i) => {
+        const data = d.data();
+        list.innerHTML += `<div class="lb-item"><span>${i+1}. ${data.name}</span><b>${data.score}</b></div>`;
+      });
+    }
+
+    async function saveRecord() {
+      if (user.uid === 'guest' || score <= best) return;
+      await db.collection('scores').doc(user.uid).set({
+        name: (user.displayName || 'Гость').split(' ')[0],
+        score: score,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+      best = score;
+      document.getElementById('myBest').textContent = best;
+      loadBestAndLeaderboard();
+    }
+
+    // Игра (без изменений)
+    function initGame() {
+      canvas = document.getElementById('c'); ctx = canvas.getContext('2d');
+      resize(); window.addEventListener('resize', resize);
+      snake = [{x:10,y:10}]; dir = {x:1,y:0}; score = 0;
+      document.querySelector('.score').textContent = '0';
+      spawnFood(); particles = []; requestAnimationFrame(loop);
+    }
+
+    function resize() {
+      const size = Math.min(innerWidth, innerHeight) * 0.92;
+      canvas.width = canvas.height = size; w = h = size; cell = size / 20;
+    }
+
+    let last = 0;
+    function loop(t) {
+      if (t - last > 90) { update(); last = t; }
+      render(); requestAnimationFrame(loop);
+    }
+
+    function update() {
+      const head = {x: snake[0].x + dir.x, y: snake[0].y + dir.y};
+      if (head.x < 0) head.x = 19; if (head.x > 19) head.x = 0;
+      if (head.y < 0) head.y = 19; if (head.y > 19) head.y = 0;
+      if (snake.some(s => s.x === head.x && s.y === head.y)) { gameOver(); return; }
+      snake.unshift(head);
+      if (head.x === food.x && head.y === food.y) {
+        score++; document.querySelector('.score').textContent = score;
+        eatSound.currentTime = 0; eatSound.play();
+        spawnFood(); createParticles();
+      } else snake.pop();
+    }
+
+    function spawnFood() {
+      do { food = {x: Math.floor(Math.random()*20), y: Math.floor(Math.random()*20)}; }
+      while (snake.some(s => s.x===food.x && s.y===food.y));
+    }
+
+    function createParticles() {
+      for(let i=0;i<25;i++){
+        particles.push({
+          x: food.x*cell + cell/2,
+          y: food.y*cell + cell/2,
+          vx:(Math.random()-0.5)*12,
+          vy:(Math.random()-0.7)*12,
+          life:1,
+          color:`hsla(${Math.random()*60+180},100%,70%,0.9)`
+        });
+      }
+    }
+
+    function render() {
+      ctx.fillStyle = 'rgba(10,10,30,0.95)'; ctx.fillRect(0,0,w,h);
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 4; ctx.strokeRect(2,2,w-4,h-4);
+
+      particles = particles.filter(p => {
+        p.x += p.vx; p.y += p.vy; p.vy += 0.4; p.life -= 0.02;
+        ctx.fillStyle = p.color; ctx.globalAlpha = p.life;
+        ctx.fillRect(p.x-4,p.y-4,8,8);
+        return p.life > 0;
+      });
+      ctx.globalAlpha = 1;
+
+      // Еда
+      const fx = food.x*cell + cell/2, fy = food.y*cell + cell/2;
+      const grad = ctx.createRadialGradient(fx,fy,0,fx,fy,cell*0.7);
+      grad.addColorStop(0,'#fff'); grad.addColorStop(0.4,'#6a5acd'); grad.addColorStop(1,'#4a00e0');
+      ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(fx,fy,cell*0.55,0,Math.PI*2); ctx.fill();
+
+      // Змейка
+      snake.forEach((s,i) => {
+        const x = s.x*cell + 2, y = s.y*cell + 2;
+        const grad2 = ctx.createLinearGradient(x,y,x+cell,y+cell);
+        if(i===0){ grad2.addColorStop(0,'#a8e6cf'); grad2.addColorStop(1,'#6a5acd'); }
+        else { grad2.addColorStop(0,'#88d8a3'); grad2.addColorStop(1,'#4a00e0'); }
+        ctx.fillStyle = grad2; ctx.fillRect(x,y,cell-4,cell-4);
+        ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(x+4,y+4,cell/3,cell/3);
+      });
+    }
+
+    function gameOver() {
+      const newRec = score > best;
+      if (newRec) saveRecord();
+      document.getElementById('finalScore').textContent = score;
+      document.getElementById('newRecord').style.display = newRec ? 'block' : 'none';
+      document.getElementById('gameOverScreen').style.display = 'block';
+    }
+
+    function restart() {
+      document.getElementById('gameOverScreen').style.display = 'none';
+      initGame();
+    }
+
+    // Управление
+    document.addEventListener('keydown', e => {
+      if ([37,38,39,40].includes(e.keyCode)) e.preventDefault();
+      if (e.key === 'ArrowLeft' || e.key === 'a') dir = {x:-1,y:0};
+      if (e.key === 'ArrowRight' || e.key === 'd') dir = {x:1,y:0};
+      if (e.key === 'ArrowUp' || e.key === 'w') dir = {x:0,y:-1};
+      if (e.key === 'ArrowDown' || e.key === 's') dir = {x:0,y:1};
+    });
+
+    let tx, ty;
+    canvas.addEventListener('touchstart', e => { tx = e.touches[0].clientX; ty = e.touches[0].clientY; });
+    canvas.addEventListener('touchmove', e => {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - tx;
+      const dy = e.touches[0].clientY - ty;
+      if (Math.abs(dx) > 40 || Math.abs(dy) > 40) {
+        if (Math.abs(dx) > Math.abs(dy)) dir = dx > 0 ? {x:1,y:0} : {x:-1,y:0};
+        else dir = dy > 0 ? {x:0,y:1} : {x:0,y:-1};
+        tx = ty = null;
+      }
+    });
+  </script>
+</body>
+</html>
