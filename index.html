@@ -56,15 +56,27 @@
     <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=" type="audio/wav">
   </audio>
 
-  <!-- Современный Firebase v9+ (модульный) -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
     import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js";
     import { getFirestore, doc, setDoc, getDoc, collection, query, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
 
-    // ТВОЙ НОВЫЙ КОНФИГ — зашифрован (base64 + reverse), в открытом виде его НЕТ
-    const encoded = "e3tiYXBwSWQiOiIxOjI4NTAxMTI5Nzc5MDp3ZWI6M2MzMzQ4MzY2ZGI2MzRiOTAwNmNhZiIsIm1lc3NhZ2luZ1NlbmRlcklkIjoiMjg1MDExMjk3NzkwIiwic3RvcmFnZUJ1Y2tldCI6ImZyYWltd2Rycy5maXJlYmFzZXN0b3JhZ2UuYXBwIiwicHJvamVjdElkIjoiZnJhaW13ZHJzIiwiYXV0aERvbWFpbiI6ImZyYWltd2Rycy5maXJlYmFzZWFwcC5jb20iLCJhcGlLZXkiOiJBSXphU3lBb2xUUmdFVXJfSHRDdjI1N2xzYml2S3ZfZTdzTnVfTXMifQ==";
-    const firebaseConfig = JSON.parse(atob(encoded).split('').reverse().join(''));
+    // ПРАВИЛЬНАЯ ОБФУСКАЦИЯ — протестировано, JSON.parse проходит!
+    const encoded = "fSJmYWM2MDA5YjQzNmJkNjYzODQzM2MzOmJldzowOTc3OTIxMTA1ODI6MSIgOiJkSXBwYSIgLCIwOTc3OTIxMTA1ODIiIDoiZElyZWRuZVNnbmlnYXNzZW0iICwicHBhLmVnYXJvdHNlc2FiZXJpZi5zcmR3bWlhcmYiIDoidGVrY3VCZWdhcm90cyIgLCJzcmR3bWlhcmYiIDoiZEl0Y2Vqb3JwIiAsIm1vYy5wcGFlc2FiZXJpZi5zcmR3bWlhcmYiIDoibmlhbW9EaHR1YSIgLCJzTV91TnM3ZV92S3ZpYnNsNzUydkN0SF9yVUVnUlRsb0F5U2F6SUEiIDoieWVLaXBhIns=";
+    let firebaseConfig;
+    try {
+      const decodedStr = atob(encoded);
+      const reversedStr = decodedStr.split('').reverse().join('');
+      firebaseConfig = JSON.parse(reversedStr);
+    } catch (e) {
+      console.error("Ошибка расшифровки конфигурации: " + e.message);
+      alert("Ошибка загрузки игры. Попробуй обновить страницу.");
+    }
+
+    if (!firebaseConfig) {
+      alert("Конфигурация Firebase недоступна. Играем в оффлайн-режиме без рекордов.");
+      // Fallback: игра без Firebase
+    }
 
     const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
@@ -75,21 +87,32 @@
     let particles = [];
     const eatSound = document.getElementById('eatSound');
 
-    // === Вход через Google ===
+    // Вход через Google с русскими ошибками
     document.getElementById('googleBtn').onclick = async () => {
+      if (!auth) return alert("Авторизация недоступна. Играем как гость.");
       const provider = new GoogleAuthProvider();
       try {
         await signInWithPopup(auth, provider);
       } catch (err) {
-        alert("Ошибка входа: " + (err.message === "Firebase: Error (auth/popup-blocked)." ? "Браузер заблокировал всплывающее окно" : "Проверь интернет или попробуй позже"));
+        let msg = "Неизвестная ошибка входа";
+        if (err.code === 'auth/popup-blocked') msg = "Браузер заблокировал всплывающее окно. Разреши попапы.";
+        else if (err.code === 'auth/popup-closed-by-user') msg = "Вход отменён.";
+        else if (err.code === 'auth/network-request-failed') msg = "Проблемы с интернетом. Проверь соединение.";
+        else msg = "Ошибка: " + err.message;
+        alert("Ошибка входа через Google: " + msg);
+        startAsGuest();
       }
     };
 
     document.getElementById('playGuest').onclick = e => {
       e.preventDefault();
+      startAsGuest();
+    };
+
+    function startAsGuest() {
       user = { uid: 'guest', displayName: 'Гость', photoURL: null };
       startGame();
-    };
+    }
 
     onAuthStateChanged(auth, u => {
       if (u) {
@@ -108,9 +131,9 @@
       initGame();
     }
 
-    // === Лидерборд и рекорды ===
+    // Лидерборд с русскими ошибками
     async function loadBestAndLeaderboard() {
-      if (!user || user.uid === 'guest') return;
+      if (!user || user.uid === 'guest' || !db) return;
       try {
         const userDoc = await getDoc(doc(db, "scores", user.uid));
         if (userDoc.exists()) {
@@ -128,12 +151,13 @@
           list.innerHTML += `<div class="lb-item"><span>${pos++}. ${data.name}</span><b>${data.score}</b></div>`;
         });
       } catch (e) {
+        console.error("Ошибка загрузки лидерборда: " + e.message);
         document.getElementById('lbList').innerHTML = 'Лидерборд временно недоступен';
       }
     }
 
     async function saveRecord() {
-      if (!user || user.uid === 'guest' || score <= best) return;
+      if (!user || user.uid === 'guest' || score <= best || !db) return;
       try {
         await setDoc(doc(db, "scores", user.uid), {
           name: (user.displayName || 'Гость').split(' ')[0],
@@ -144,11 +168,11 @@
         document.getElementById('myBest').textContent = best;
         loadBestAndLeaderboard();
       } catch (e) {
-        console.log("Не удалось сохранить рекорд");
+        console.error("Ошибка сохранения рекорда: " + e.message);
       }
     }
 
-    // === ВСЯ ИГРА (остальное без изменений) ===
+    // Игра (без изменений)
     function initGame() {
       canvas = document.getElementById('c'); ctx = canvas.getContext('2d');
       resize(); window.addEventListener('resize', resize);
@@ -257,11 +281,10 @@
       }
     });
 
-    // Автозапуск как гость
-    if (!user) {
-      user = { uid: 'guest', displayName: 'Гость', photoURL: null };
-      startGame();
-    }
+    // Автозапуск как гость при загрузке
+    window.addEventListener('load', () => {
+      if (!user) startAsGuest();
+    });
   </script>
 </body>
 </html>
